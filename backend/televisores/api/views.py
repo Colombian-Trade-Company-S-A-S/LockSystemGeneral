@@ -161,12 +161,17 @@ class TelevisorViewSet(EmpresaScopedViewSetMixin, viewsets.ModelViewSet):
             'mensaje': mensaje,
         })
 
+    def _lanzar_validacion_masiva(self, request, empresa):
+        """Panel: valida TODOS los televisores de la empresa. La API de
+        integración lo sobreescribe para validar SOLO los seriales del JSON."""
+        from televisores.bulk_sync import lanzar_validacion_masiva
+
+        return lanzar_validacion_masiva(empresa=empresa)
+
     @action(detail=False, methods=['post'], url_path='validar-masivo')
     def validar_masivo(self, request):
         """Lanza una validación masiva (dry-run) de los televisores de la empresa."""
-        from televisores.bulk_sync import lanzar_validacion_masiva
-
-        job = lanzar_validacion_masiva(empresa=self.empresa_destino())
+        job = self._lanzar_validacion_masiva(request, self.empresa_destino())
         if job is None:
             return Response(
                 {'detail': 'No hay televisores para validar.'},

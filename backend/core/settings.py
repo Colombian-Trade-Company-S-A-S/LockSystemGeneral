@@ -135,6 +135,21 @@ if DATABASE_URL:
         # El Postgres gestionado de Render exige TLS desde fuera de su red.
         ssl_require=os.getenv('DATABASE_SSL_REQUIRE', 'True') == 'True',
     )
+
+    # La instancia de Postgres es compartida con la app antigua (whaletv), que
+    # vive en `public`, y con el despliegue de Claro (`LockClaro`). Todo lo de
+    # esta app va a su propio esquema para que convivan sin pisarse: DB_SCHEMA
+    # fija el search_path de la conexión y Django crea y consulta sus tablas
+    # ahí sin tocar `public`.
+    #
+    # El esquema debe existir antes de migrar:
+    #   CREATE SCHEMA IF NOT EXISTS "LockEstandar";
+    DB_SCHEMA = os.getenv('DB_SCHEMA', '').strip()
+    if DB_SCHEMA:
+        # Comillas dobles: el nombre lleva mayúsculas y Postgres las plegaría
+        # a minúsculas si fuera sin citar.
+        DATABASES['default'].setdefault('OPTIONS', {})
+        DATABASES['default']['OPTIONS']['options'] = f'-c search_path="{DB_SCHEMA}"'
 elif not DEBUG:
     raise ImproperlyConfigured(
         'Falta DATABASE_URL. Con DEBUG=False no se puede usar SQLite: el disco '

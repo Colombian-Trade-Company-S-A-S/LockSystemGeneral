@@ -42,3 +42,15 @@ class IntegracionTelevisorViewSet(TelevisorViewSet):
                 request.data.get('registros'), empresa=empresa
             )
         return None
+
+    def _lanzar_validacion_masiva(self, request, empresa):
+        """En integración la validación masiva también es por SERIAL: valida solo
+        los seriales del JSON `registros` (formato `[{"serial_number": ...}]`).
+        Si no viene `registros`, cae al comportamiento base (validar todos)."""
+        from televisores.bulk_sync import lanzar_validacion_por_serial
+
+        if 'registros' in request.data:
+            return lanzar_validacion_por_serial(
+                request.data.get('registros'), empresa=empresa
+            )
+        return super()._lanzar_validacion_masiva(request, empresa)
