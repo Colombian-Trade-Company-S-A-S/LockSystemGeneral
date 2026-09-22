@@ -152,9 +152,13 @@ class LogoutRevocationApiTests(APITestCase):
         )
         self.access = resp.data['access']
         self.refresh = resp.data['refresh']
+        # Sesión única: el cliente reenvía el navegador que le asignó el login.
+        self.device = resp.data['device_id']
 
     def _auth(self, token):
-        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f'Bearer {token}', HTTP_X_DEVICE_ID=self.device
+        )
 
     def test_logout_invalida_access_y_refresh(self):
         self._auth(self.access)
@@ -172,7 +176,10 @@ class LogoutRevocationApiTests(APITestCase):
         # El refresh anterior ya no emite tokens.
         self.client.credentials()
         r = self.client.post(
-            reverse('users:token_refresh'), {'refresh': self.refresh}, format='json'
+            reverse('users:token_refresh'),
+            {'refresh': self.refresh},
+            format='json',
+            HTTP_X_DEVICE_ID=self.device,
         )
         self.assertEqual(r.status_code, 401)
 
@@ -188,6 +195,7 @@ class LogoutRevocationApiTests(APITestCase):
             format='json',
         )
         self.assertEqual(r.status_code, 200)
+        self.device = r.data['device_id']
         self._auth(r.data['access'])
         self.assertEqual(self.client.get(reverse('users:me')).status_code, 200)
 

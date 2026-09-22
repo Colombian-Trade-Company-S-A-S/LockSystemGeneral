@@ -57,3 +57,13 @@ export function useActualizarUsuario(id: string) {
     },
   })
 }
+
+export function useCerrarSesionUsuario() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => usuariosApi.cerrarSesion(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: usuariosKeys.all })
+    },
+  })
+}

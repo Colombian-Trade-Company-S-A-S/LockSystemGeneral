@@ -3,6 +3,7 @@
 
 import { config } from '@/lib/config'
 import { apiFetch, refreshSession } from '@/lib/http/client'
+import { setDeviceId } from '@/lib/http/device'
 import { tokenStore } from '@/lib/http/tokens'
 import type { AuthTokens, User } from '@/features/auth/types'
 
@@ -16,6 +17,8 @@ export const authApi = {
     })
     tokenStore.setAccess(tokens.access)
     tokenStore.setRefresh(tokens.refresh)
+    // El backend confirma con qué dispositivo quedó atada la sesión.
+    setDeviceId(tokens.device_id)
     return authApi.me()
   },
 
@@ -36,6 +39,16 @@ export const authApi = {
       tokenStore.clear()
       return null
     }
+  },
+
+  /**
+   * Descarta la sesión SOLO en el cliente, sin llamar al backend.
+   * Se usa cuando es el servidor quien la dio por terminada (la cerró un
+   * administrador, caducó, o la cuenta se abrió en otro dispositivo): pedirle
+   * un logout con tokens que ya rechazó no aporta nada.
+   */
+  discard(): void {
+    tokenStore.clear()
   },
 
   /**

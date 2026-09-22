@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import {
   ArrowRight,
@@ -10,8 +10,10 @@ import {
   Lock,
   Mail,
   ShieldCheck,
+  Timer,
 } from 'lucide-react'
 import { useAuth } from '@/features/auth/context/auth-context'
+import { config } from '@/lib/config'
 import { ApiError } from '@/lib/http/errors'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -88,6 +90,20 @@ export function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [aviso, setAviso] = useState<string | null>(null)
+
+  // Si llegamos aquí porque se cerró la sesión sola, explicamos por qué en vez
+  // de dejar al usuario preguntándose qué pasó. La marca se consume al leerla.
+  useEffect(() => {
+    const motivo = sessionStorage.getItem(config.storage.logoutReason)
+    if (!motivo) return
+    sessionStorage.removeItem(config.storage.logoutReason)
+    setAviso(
+      motivo === 'idle'
+        ? 'Tu sesión se cerró por inactividad. Ingresa de nuevo para continuar.'
+        : 'Tu sesión se cerró desde el servidor. Puede que la hayan cerrado o que la cuenta se haya abierto en otro dispositivo.',
+    )
+  }, [])
 
   // Si ya hay sesión, no mostramos el login.
   if (status === 'authenticated') return <Navigate to="/" replace />
@@ -104,6 +120,10 @@ export function LoginPage() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setError('Credenciales inválidas. Revisa tu correo y contraseña.')
+      } else if (err instanceof ApiError && err.status === 409) {
+        // Sesión única: el backend explica si la cuenta ya está abierta en otro
+        // dispositivo o si este navegador lo ocupa otra cuenta.
+        setError(err.message)
       } else {
         setError('No fue posible iniciar sesión. Intenta de nuevo.')
       }
@@ -184,6 +204,13 @@ export function LoginPage() {
             </CardHeader>
             <CardContent>
               <form onSubmit={onSubmit} className="flex flex-col gap-5" noValidate>
+                {aviso && !error && (
+                  <Alert>
+                    <Timer />
+                    <AlertDescription>{aviso}</AlertDescription>
+                  </Alert>
+                )}
+
                 {error && (
                   <Alert variant="destructive">
                     <CircleAlert />

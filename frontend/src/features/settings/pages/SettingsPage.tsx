@@ -8,11 +8,14 @@ import {
   Lock,
   Moon,
   Palette,
+  Stethoscope,
   Sun,
   User,
 } from 'lucide-react'
 import { useAuth } from '@/features/auth/context/auth-context'
+import { puedeDiagnosticarApi } from '@/features/auth/permissions'
 import { settingsApi } from '@/features/settings/api/settings.api'
+import { DiagnosticoApiPanel } from '@/features/settings/components/DiagnosticoApiPanel'
 import { ACCENTS, useAccent } from '@/features/settings/accent'
 import { useLayoutPrefs } from '@/shared/layout/useLayoutPrefs'
 import { ApiError } from '@/lib/http/errors'
@@ -378,6 +381,11 @@ function AparienciaPanel() {
 // Página: tabs verticales (nav) + panel
 // ---------------------------------------------------------------------------
 export function SettingsPage() {
+  // Solo decide si se MUESTRA; quien autoriza de verdad es el backend
+  // (settings.DIAGNOSTICO_API_EMAILS), que devuelve 403 a los demás.
+  const { user } = useAuth()
+  const puedeDiagnostico = puedeDiagnosticarApi(user)
+
   return (
     <div className="mx-auto max-w-4xl">
       <div className="mb-6">
@@ -398,6 +406,11 @@ export function SettingsPage() {
           <TabsTrigger value="apariencia">
             <Palette /> Apariencia
           </TabsTrigger>
+          {puedeDiagnostico && (
+            <TabsTrigger value="diagnostico">
+              <Stethoscope /> Estado API
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="perfil">
@@ -409,6 +422,11 @@ export function SettingsPage() {
         <TabsContent value="apariencia">
           <AparienciaPanel />
         </TabsContent>
+        {puedeDiagnostico && (
+          <TabsContent value="diagnostico">
+            <DiagnosticoApiPanel />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   )

@@ -49,4 +49,12 @@ export const usuariosApi = {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
+
+  /**
+   * Fuerza el cierre de la sesión de un usuario y libera su cuenta.
+   * Es la salida para quien dejó la sesión colgada en un equipo al que ya no
+   * llega: sin esto habría que esperar a que caduque por inactividad.
+   */
+  cerrarSesion: (id: string) =>
+    apiFetch<User>(`/api/usuarios/${id}/cerrar-sesion/`, { method: 'POST' }),
 }

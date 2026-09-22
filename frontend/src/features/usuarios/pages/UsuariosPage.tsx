@@ -1,7 +1,19 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Building2, ChevronLeft, ChevronRight, CircleAlert, Plus } from 'lucide-react'
-import { useUsuarios } from '@/features/usuarios/api/usuarios.queries'
+import {
+  Building2,
+  ChevronLeft,
+  ChevronRight,
+  CircleAlert,
+  Loader2,
+  LogOut,
+  Monitor,
+  Plus,
+} from 'lucide-react'
+import {
+  useCerrarSesionUsuario,
+  useUsuarios,
+} from '@/features/usuarios/api/usuarios.queries'
 import { usePermissions } from '@/features/auth/usePermissions'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -24,7 +36,8 @@ export function UsuariosPage() {
   // La columna Empresa solo tiene sentido para el administrador general: a un
   // admin de empresa todos los usuarios que ve son, por definición, de la suya.
   const { isSuperAdmin } = usePermissions()
-  const columnas = isSuperAdmin ? 6 : 5
+  // +1 por la columna de sesión (sesión única: quién tiene la cuenta ocupada).
+  const columnas = isSuperAdmin ? 7 : 6
 
   const [page, setPage] = useState(1)
   const [query, setQuery] = useState('')
@@ -33,6 +46,20 @@ export function UsuariosPage() {
   const { data, isPending, isFetching, isError, error } = useUsuarios(search, page)
   const items = data?.results ?? []
   const count = data?.count ?? 0
+
+  // Cierre forzado de la sesión de un usuario (válvula de escape de la sesión
+  // única). Guardamos a quién se lo estamos haciendo para el estado del botón.
+  const cerrarSesion = useCerrarSesionUsuario()
+  const [cerrando, setCerrando] = useState<string | null>(null)
+
+  function onCerrarSesion(id: string, email: string) {
+    // Le tira a alguien de la aplicación en caliente: mejor confirmarlo.
+    if (!window.confirm(`¿Cerrar la sesión de ${email}? Tendrá que volver a entrar.`)) {
+      return
+    }
+    setCerrando(id)
+    cerrarSesion.mutate(id, { onSettled: () => setCerrando(null) })
+  }
 
   function onSearch(e: React.FormEvent) {
     e.preventDefault()
@@ -94,6 +121,7 @@ export function UsuariosPage() {
               {isSuperAdmin && <TableHead>Empresa</TableHead>}
               <TableHead>Rol</TableHead>
               <TableHead>Estado</TableHead>
+              <TableHead>Sesión</TableHead>
               <TableHead className="text-right">Acciones</TableHead>
             </TableRow>
           </TableHeader>
@@ -152,14 +180,45 @@ export function UsuariosPage() {
                       </Badge>
                     )}
                   </TableCell>
+                  <TableCell>
+                    {u.sesion_activa ? (
+                      <span
+                        className="flex items-center gap-1.5 text-sm"
+                        title={u.sesion_dispositivo || undefined}
+                      >
+                        <Monitor className="size-3.5 text-muted-foreground" />
+                        {u.sesion_dispositivo || 'Conectado'}
+                      </span>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">Sin sesión</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      render={<Link to={`/usuarios/${u.id}/editar`} />}
-                    >
-                      Editar
-                    </Button>
+                    <div className="flex justify-end gap-2">
+                      {u.sesion_activa && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={cerrando === u.id}
+                          onClick={() => onCerrarSesion(u.id, u.email)}
+                          title="Libera la cuenta para que pueda entrar desde otro equipo"
+                        >
+                          {cerrando === u.id ? (
+                            <Loader2 className="animate-spin" data-icon="inline-start" />
+                          ) : (
+                            <LogOut data-icon="inline-start" />
+                          )}
+                          Cerrar sesión
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        render={<Link to={`/usuarios/${u.id}/editar`} />}
+                      >
+                        Editar
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))

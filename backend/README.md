@@ -74,6 +74,13 @@ ALLOWED_HOSTS=localhost,127.0.0.1
 # --- JWT ---
 JWT_SIGNING_KEY=       # opcional; si se omite usa SECRET_KEY
 
+# --- Sesión ---
+# Minutos de inactividad tras los cuales se cierra la sesión: 1 = 1 minuto,
+# 30 = 30 minutos… 0 (o ausente) desactiva el cierre automático.
+# El corte lo aplica el servidor (users/session.py) y el valor viaja en
+# /api/me/, así que se cambia aquí y el frontend obedece sin recompilarse.
+SESSION_IDLE_TIMEOUT_MINUTES=1
+
 # --- CORS (allowlist explícita; NO uses el comodín en producción) ---
 CORS_ALLOW_ALL_ORIGINS=False
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
@@ -109,6 +116,20 @@ sigue la clave de desarrollo. Ver [SECURITY.md](SECURITY.md).
 | POST              | `/api/token/`            | Obtener access + refresh token  |
 | POST              | `/api/token/refresh/`    | Renovar access token            |
 | —                 | `/admin/`                | Panel de administración         |
+
+### Sesión del portal
+
+| Método | Ruta                                   | Descripción                          |
+|--------|----------------------------------------|--------------------------------------|
+| POST   | `/api/auth/token/`                     | Iniciar sesión (email + contraseña)  |
+| POST   | `/api/auth/logout/`                    | Cerrar la propia sesión              |
+| POST   | `/api/usuarios/{id}/cerrar-sesion/`    | Cerrar la sesión de otro (admin)     |
+
+Toda petición autenticada debe llevar, además del `Authorization: Bearer`, la
+cabecera **`X-Device-Id`** con el identificador del navegador. Es lo que sostiene
+la sesión única (una cuenta = un navegador): el login devuelve el `device_id`
+asignado y el cliente lo reenvía en cada llamada. Un token usado desde otro
+navegador se rechaza. Ver `users/session.py` y `SECURITY.md`.
 
 ### Autenticación
 

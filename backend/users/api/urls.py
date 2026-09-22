@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework_simplejwt.views import TokenVerifyView
 
 from .views import (
+    AdminCerrarSesionView,
     AdminUserDetailView,
     AdminUserListCreateView,
     ChangePasswordView,
@@ -30,4 +31,11 @@ urlpatterns = [
     # Gestión de usuarios (solo Administrador)
     path('usuarios/', AdminUserListCreateView.as_view(), name='usuarios'),
     path('usuarios/<uuid:pk>/', AdminUserDetailView.as_view(), name='usuario-detalle'),
+    # Válvula de escape de la sesión única: libera la cuenta de un usuario que
+    # dejó la sesión colgada en un equipo al que ya no tiene acceso.
+    path(
+        'usuarios/<uuid:pk>/cerrar-sesion/',
+        AdminCerrarSesionView.as_view(),
+        name='usuario-cerrar-sesion',
+    ),
 ]

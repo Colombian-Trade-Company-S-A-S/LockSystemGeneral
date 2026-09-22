@@ -6,8 +6,13 @@ from rest_framework.response import Response
 from empresas.scoping import EmpresaScopedViewSetMixin, acotar
 from televisores.models import Televisor
 from users.permissions import CanOperate, IsNotGlobalAdmin
+from televisores.portal.proveedor import modo as modo_portal
+from televisores.portal.proveedor import proveedor
+from televisores.portal.scraper import (
+    PortalCapacidadNoDisponible,
+    PortalPasscodeInvalido,
+)
 from televisores.portal.client import (
-    PortalClient,
     PortalDispositivoNoExiste,
     PortalError,
 )
@@ -109,17 +114,21 @@ class TelevisorViewSet(EmpresaScopedViewSetMixin, viewsets.ModelViewSet):
         return Response(resultado, status=status.HTTP_200_OK)
 
     # ------------------------------------------------------------------
-    # Integración con el portal WhaleTV (Device Lock API)
+    # Integración con el portal WhaleTV
     # ------------------------------------------------------------------
+    # `proveedor()` elige solo entre la Portal API, la Device Lock API y el
+    # scraping, según qué credenciales haya. `modo` viaja en la respuesta para
+    # no tener que adivinar de dónde salió el dato.
     def _leer_estado_portal(self, tv: Televisor) -> Response | dict:
         try:
-            data = PortalClient().get_status(tv.eui64_portal)
+            data = proveedor().get_status(tv)
         except PortalDispositivoNoExiste as e:
             return Response({'detail': str(e)}, status=status.HTTP_404_NOT_FOUND)
         except PortalError as e:
             return Response({'detail': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
         return {
             'eui64': tv.eui64_portal,
+            'modo': modo_portal(),
             'lock_status': data['lockStatus'],       # 0=desbloqueado, 1=bloqueado
             'payment_status': data['paymentStatus'],  # 0=en progreso, 1=completado
             'clear_status': data['clearStatus'],      # 0=normal, 1=limpiando
@@ -233,12 +242,22 @@ class TelevisorViewSet(EmpresaScopedViewSetMixin, viewsets.ModelViewSet):
         """Grupos de Pin Code disponibles del dispositivo (passCode + pinCode)."""
         tv = self.get_object()
         try:
-            grupos = PortalClient().get_pin_codes(tv.eui64_portal)
+            grupos = proveedor().get_pin_codes(tv)
+        except PortalCapacidadNoDisponible as e:
+            # Ni la Portal API ni el portal web publican la bolsa de códigos
+            # disponibles: solo resuelven un Código de Acceso concreto.
+            return Response(
+                {'detail': (
+                    f'{e} Usa POST pincodes/usar/ con el Código de Acceso que '
+                    'muestra el televisor.'
+                )},
+                status=status.HTTP_501_NOT_IMPLEMENTED,
+            )
         except PortalDispositivoNoExiste as e:
             return Response({'detail': str(e)}, status=status.HTTP_404_NOT_FOUND)
         except PortalError as e:
             return Response({'detail': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
-        return Response({'eui64': tv.eui64_portal, 'grupos': grupos})
+        return Response({'eui64': tv.eui64_portal, 'modo': modo_portal(), 'grupos': grupos})
 
     @action(detail=True, methods=['post'], url_path='pincodes/usar')
     def pincode_usar(self, request, pk=None):
@@ -254,39 +273,39 @@ class TelevisorViewSet(EmpresaScopedViewSetMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        client = PortalClient()
+        # El proveedor resuelve el passcode y ya lo deja marcado como usado:
+        # por Device Lock API con `marcar_pincodes_usados`, por Portal API al
+        # generarlo (`POST /devices/pincode` entrega y consume en una llamada).
         try:
-            grupos = client.get_pin_codes(tv.eui64_portal)
-        except PortalDispositivoNoExiste as e:
-            return Response({'detail': str(e)}, status=status.HTTP_404_NOT_FOUND)
-        except PortalError as e:
-            return Response({'detail': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
-
-        grupo = next((g for g in grupos if g['passCode'] == passcode), None)
-        if grupo is None:
+            pin_code = proveedor().usar_pincode(tv, passcode)
+        except ValueError as e:
+            # MAC con formato que el portal no acepta.
+            return Response(
+                {'detail': str(e) or 'La dirección MAC no es válida.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except PortalPasscodeInvalido:
             return Response(
                 {'detail': 'No hay un Código Pin disponible para ese Código de Acceso.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
-
-        # Marca el código como usado en el portal (no bloquea si falla).
-        try:
-            client.marcar_pincodes_usados(tv.eui64_portal, [passcode])
-        except PortalError:
-            pass
+        except PortalDispositivoNoExiste as e:
+            return Response({'detail': str(e)}, status=status.HTTP_404_NOT_FOUND)
+        except PortalError as e:
+            return Response({'detail': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
 
         registro = PinCodeUsado.objects.create(
             empresa=tv.empresa,
             televisor=tv,
             mac_address=tv.mac_address,
             passcode=passcode,
-            pin_code=grupo['pinCode'],
+            pin_code=pin_code,
             usuario=usuario_para_auditoria(request),
             ip=client_ip(request),
         )
         return Response({
             'passcode': passcode,
-            'pin_code': grupo['pinCode'],
+            'pin_code': pin_code,
             'creado': registro.creado,
         })
 

@@ -23,6 +23,15 @@ from users.authentication import (
     token_esta_revocado,
 )
 from users.permissions import IsAdminRole
+from users.session import (
+    abrir_sesion,
+    describir_dispositivo,
+    dispositivo_ajeno,
+    dispositivo_de,
+    registrar_actividad,
+    sesion_expirada,
+    verificar_puede_iniciar_sesion,
+)
 from users.selectors import user_list
 from users.services import user_set_password
 
@@ -30,6 +39,7 @@ from .serializers import (
     AdminUserCreateSerializer,
     AdminUserUpdateSerializer,
     ChangePasswordSerializer,
+    MeSerializer,
     MeUpdateSerializer,
     UserSerializer,
 )
@@ -57,12 +67,12 @@ class MeView(generics.RetrieveUpdateAPIView):
     def get_serializer_class(self):
         if self.request.method == 'PATCH':
             return MeUpdateSerializer
-        return UserSerializer
+        return MeSerializer
 
     def update(self, request, *args, **kwargs):
         super().update(request, *args, **kwargs)
         # Responde siempre con la representación segura y completa del perfil.
-        return Response(UserSerializer(self.get_object()).data)
+        return Response(MeSerializer(self.get_object()).data)
 
 
 class VersionedTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -82,6 +92,18 @@ class VersionedTokenObtainPairSerializer(TokenObtainPairSerializer):
         # Empresa desactivada -> su gente no entra, aunque la cuenta siga activa.
         if empresa_inactiva(self.user):
             raise InvalidToken('La empresa de tu cuenta está desactivada.')
+
+        # Sesión única: una cuenta en un solo navegador y un navegador con una
+        # sola cuenta. Se comprueba con las credenciales ya validadas, para no
+        # contarle a un desconocido quién tiene sesión abierta.
+        peticion = self.context['request']
+        dispositivo = dispositivo_de(peticion)
+        verificar_puede_iniciar_sesion(self.user, dispositivo)
+        abrir_sesion(self.user, dispositivo, describir_dispositivo(peticion))
+
+        # El cliente guarda este identificador y lo reenvía en cada petición;
+        # es lo que ata la sesión a este navegador.
+        data['device_id'] = dispositivo
         return data
 
 
@@ -98,6 +120,9 @@ class RevocationAwareTokenRefreshSerializer(TokenRefreshSerializer):
 
     Rechaza un refresh emitido antes del corte del usuario, o de una cuenta
     inactiva/eliminada, antes de emitir un nuevo par de tokens.
+
+    También comprueba la inactividad: sin esto, un refresh guardado permitiría
+    resucitar una sesión ya vencida, que es justo lo que el plazo evita.
     """
 
     def validate(self, attrs):
@@ -113,8 +138,19 @@ class RevocationAwareTokenRefreshSerializer(TokenRefreshSerializer):
             raise InvalidToken('La sesión fue cerrada. Inicia sesión de nuevo.')
         if empresa_inactiva(user):
             raise InvalidToken('La empresa de tu cuenta está desactivada.')
+        if sesion_expirada(user):
+            raise InvalidToken('Tu sesión se cerró por inactividad.')
+        # Renovar desde otro navegador sería la manera de esquivar la sesión
+        # única: el refresh queda atado al dispositivo igual que el access.
+        if dispositivo_ajeno(user, dispositivo_de(self.context['request'])):
+            raise InvalidToken(
+                'Tu sesión está abierta en otro dispositivo. Inicia sesión de nuevo.'
+            )
 
-        return super().validate(attrs)
+        data = super().validate(attrs)
+        # Renovar el token es señal de que el cliente sigue trabajando.
+        registrar_actividad(user, forzar=True)
+        return data
 
 
 class RefreshView(TokenRefreshView):
@@ -131,12 +167,15 @@ class LogoutView(APIView):
     A partir de aquí, cualquier access/refresh emitido antes deja de ser válido
     (incluye los que hubieran podido filtrarse). El cliente además descarta los
     suyos localmente.
+
+    Libera también el navegador que tenía ocupado, que es lo que permite volver
+    a entrar en el acto desde otro equipo o dejarle el equipo a un compañero.
     """
 
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        request.user.revoke_tokens()
+        request.user.cerrar_sesion()
         return Response(status=status.HTTP_205_RESET_CONTENT)
 
 
@@ -268,3 +307,25 @@ class AdminUserDetailView(generics.RetrieveUpdateAPIView):
         super().update(request, *args, **kwargs)
         # Devuelve siempre la representación segura y completa del usuario.
         return Response(UserSerializer(self.get_object()).data)
+
+
+class AdminCerrarSesionView(APIView):
+    """Fuerza el cierre de la sesión de un usuario. Solo administradores.
+
+    Es la válvula de escape de la sesión única: si alguien deja la sesión colgada
+    (portátil averiado, se fue de viaje, cerró el navegador de golpe) su cuenta
+    queda ocupada hasta que caduque por inactividad. Con esto un administrador la
+    libera en el acto, sin esperar al reloj.
+
+    Va acotado a la empresa igual que el resto de la gestión de usuarios: pedir
+    a alguien de otra empresa da 404.
+    """
+
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def post(self, request, pk):
+        usuario = generics.get_object_or_404(
+            acotar(user_list(), request.user), pk=pk
+        )
+        usuario.cerrar_sesion()
+        return Response(UserSerializer(usuario).data)

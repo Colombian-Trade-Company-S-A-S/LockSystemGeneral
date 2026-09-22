@@ -10,7 +10,28 @@ interface TokenPair {
   refresh: string
 }
 
+/** Una comprobación individual del diagnóstico de la API. */
+export interface PruebaApi {
+  nombre: string
+  ok: boolean
+  detalle: string
+  ms: number | null
+}
+
+export interface DiagnosticoApi {
+  ok: boolean
+  usa_api: boolean
+  host: string
+  brand_id: string
+  access_key: string
+  pruebas: PruebaApi[]
+  resumen: string
+}
+
 export const settingsApi = {
+  /** Comprueba en vivo si la API de WhaleTV responde. Solo lectura. */
+  probarApi: () => apiFetch<DiagnosticoApi>(config.endpoints.diagnosticoApi),
+
   /** Edita el perfil propio (nombre/apellido). Devuelve el usuario actualizado. */
   updateProfile: (data: { first_name: string; last_name: string }) =>
     apiFetch<User>(config.endpoints.me, {

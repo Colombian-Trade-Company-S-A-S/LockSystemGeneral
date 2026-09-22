@@ -27,11 +27,26 @@ export interface User {
   date_joined: string
   /** Preferencia de color de acento (clave del preset, p. ej. 'neutro'). */
   accent: string
+  /**
+   * Minutos de inactividad permitidos antes de cerrar la sesión. Lo decide el
+   * backend (SESSION_IDLE_TIMEOUT_MINUTES en su `.env`) y lo impone él mismo;
+   * aquí solo se usa para llevar al usuario al login a tiempo. 0 = desactivado.
+   * Solo viaja en /api/me/: en los listados de usuarios no viene.
+   */
+  session_timeout_minutes?: number
+  /** Sesión única: la cuenta tiene ahora mismo una sesión ocupando un navegador. */
+  sesion_activa: boolean
+  /** Navegador donde quedó abierta, en legible ("Chrome en Windows"). */
+  sesion_dispositivo: string
+  /** Cuándo se abrió esa sesión. */
+  session_started_at: string | null
 }
 
 export interface AuthTokens {
   access: string
   refresh: string
+  /** Dispositivo con el que el backend ató la sesión (ver sesión única). */
+  device_id?: string
 }
 
 export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated'

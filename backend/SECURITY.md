@@ -25,6 +25,36 @@ Resumen de las medidas de seguridad implementadas y la checklist de despliegue.
   de Windows** en esta ruta de OneDrive (verificado: 265). Este enfoque no
   necesita esa app y cubre el caso de uso (cierre de sesión / revocación).
 
+### Cierre por inactividad ✔
+
+- `SESSION_IDLE_TIMEOUT_MINUTES` (en `.env`, en minutos; `0` lo desactiva) define
+  cuánto puede estar quieto un usuario antes de que su sesión muera.
+- Lo aplica el **servidor**: cada petición autenticada actualiza `user.last_activity`
+  y, si el hueco supera el plazo, el token deja de validar (`users/session.py`).
+  Se comprueba tanto en la autenticación como en el **refresh**: si solo se mirara
+  en la primera, bastaría con renovar el token para resucitar una sesión muerta.
+- El valor viaja en `/api/me/` (`session_timeout_minutes`) para que el frontend
+  lleve al usuario al login a tiempo. Eso es comodidad de interfaz, **no** la
+  barrera: un token usado desde `curl` se rechaza igual.
+
+### Sesión única: una cuenta, un navegador ✔
+
+- Una cuenta solo puede tener sesión abierta en **un navegador**, y un navegador
+  solo puede tener abierta **una cuenta**. El segundo intento recibe un `409`
+  (`sesion_en_otro_dispositivo` / `dispositivo_ocupado`).
+- Cada cliente se identifica con la cabecera `X-Device-Id`; la cuenta apunta a
+  ese navegador (`user.device_id`) mientras la sesión viva. Un access o refresh
+  **usado desde otro navegador se rechaza**, así que un token robado no sirve
+  por sí solo.
+- Se libera al cerrar sesión, al caducar por inactividad, o cuando un
+  administrador fuerza el cierre con `POST /api/usuarios/<id>/cerrar-sesion/`
+  (válvula de escape para cuentas atascadas en un equipo inaccesible).
+- **Alcance real:** el identificador lo guarda el navegador, así que se puede
+  borrar para presentarse como uno nuevo. Eso no da dos sesiones simultáneas —la
+  cuenta solo admite un dispositivo y el resto se rechaza—, pero significa que
+  "un navegador, una cuenta" es una restricción de uso, no una barrera
+  criptográfica. Atar la sesión al hardware exigiría certificados de cliente.
+
 ## Contraseñas
 
 - **Hashing Argon2id** como algoritmo principal (recomendación OWASP), con

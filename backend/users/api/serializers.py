@@ -9,6 +9,7 @@ Principios de seguridad aplicados:
 """
 from __future__ import annotations
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
@@ -17,6 +18,7 @@ from empresas.api.serializers import EmpresaBreveSerializer
 from empresas.models import Empresa
 from users.models import Role
 from users.services import user_create, user_update
+from users.session import sesion_activa
 
 User = get_user_model()
 
@@ -61,6 +63,12 @@ class UserSerializer(serializers.ModelSerializer):
     # es editable desde la API: se fija al crear la cuenta.
     empresa = EmpresaBreveSerializer(read_only=True)
     is_superadmin = serializers.BooleanField(read_only=True)
+    # Estado de la sesión única: la pantalla de usuarios muestra quién tiene una
+    # sesión ocupando su cuenta y ofrece cerrarla.
+    sesion_activa = serializers.SerializerMethodField()
+    sesion_dispositivo = serializers.CharField(
+        source='device_label', read_only=True
+    )
 
     class Meta:
         model = User
@@ -77,8 +85,36 @@ class UserSerializer(serializers.ModelSerializer):
             'is_active',
             'date_joined',
             'accent',
+            'sesion_activa',
+            'sesion_dispositivo',
+            'session_started_at',
         )
         read_only_fields = fields
+
+    def get_sesion_activa(self, obj) -> bool:
+        """True si la cuenta tiene una sesión abierta ocupando un navegador."""
+        return sesion_activa(obj)
+
+
+class MeSerializer(UserSerializer):
+    """Perfil propio (/api/me/): el usuario más los ajustes de su sesión.
+
+    Añade el plazo de inactividad para que el frontend lo lea del servidor en
+    vez de llevarlo compilado: se cambia SESSION_IDLE_TIMEOUT_MINUTES en el
+    `.env` del backend y la interfaz obedece sin recompilar nada. Quien manda
+    sigue siendo el backend —él rechaza los tokens vencidos—; el frontend solo
+    usa el dato para llevar al usuario al login en el momento justo.
+    """
+
+    session_timeout_minutes = serializers.SerializerMethodField()
+
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ('session_timeout_minutes',)
+        read_only_fields = fields
+
+    def get_session_timeout_minutes(self, obj) -> int:
+        """Minutos de inactividad permitidos. 0 = sin cierre automático."""
+        return settings.SESSION_IDLE_TIMEOUT_MINUTES
 
 
 class AdminUserCreateSerializer(serializers.ModelSerializer):

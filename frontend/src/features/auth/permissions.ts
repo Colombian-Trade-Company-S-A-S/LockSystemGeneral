@@ -31,6 +31,18 @@ export function canOperate(user: User | null): boolean {
   return user?.role === 'operador' || user?.role === 'admin'
 }
 
+/**
+ * Diagnóstico de la API de WhaleTV: herramienta de soporte, no del producto.
+ * La lista real vive en `settings.DIAGNOSTICO_API_EMAILS` del backend, que es
+ * quien autoriza de verdad; aquí solo se decide si se muestra la pestaña.
+ */
+const CORREOS_DIAGNOSTICO = ['palaciosjulian286@gmail.com']
+
+export function puedeDiagnosticarApi(user: User | null): boolean {
+  const correo = user?.email?.trim().toLowerCase()
+  return !!correo && CORREOS_DIAGNOSTICO.includes(correo)
+}
+
 export const ROLE_LABELS: Record<Role, string> = {
   admin: 'Administrador',
   operador: 'Operador',

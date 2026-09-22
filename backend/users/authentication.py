@@ -13,6 +13,13 @@ from __future__ import annotations
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken
 
+from users.session import (
+    dispositivo_ajeno,
+    dispositivo_de,
+    registrar_actividad,
+    sesion_expirada,
+)
+
 # Nombre del claim que transporta la versión de token.
 TOKEN_VERSION_CLAIM = 'tv'
 
@@ -34,7 +41,7 @@ def empresa_inactiva(user) -> bool:
 
 
 class RevocationAwareJWTAuthentication(JWTAuthentication):
-    """JWTAuthentication que además respeta la revocación por versión de token."""
+    """JWTAuthentication que respeta revocación, inactividad y sesión única."""
 
     def get_user(self, validated_token):
         user = super().get_user(validated_token)
@@ -42,4 +49,27 @@ class RevocationAwareJWTAuthentication(JWTAuthentication):
             raise InvalidToken('La sesión fue cerrada. Inicia sesión de nuevo.')
         if empresa_inactiva(user):
             raise InvalidToken('La empresa de tu cuenta está desactivada.')
+        if sesion_expirada(user):
+            raise InvalidToken('Tu sesión se cerró por inactividad.')
         return user
+
+    def authenticate(self, request):
+        """Añade la comprobación del navegador a la autenticación normal.
+
+        Va aquí y no en `get_user` porque es lo primero que ve la petición
+        completa (con sus cabeceras). Un token que se lleven a otro equipo se
+        queda fuera: no basta con el token, tiene que llegar desde el mismo
+        navegador donde se abrió la sesión.
+        """
+        resultado = super().authenticate(request)
+        if resultado is None:
+            return None
+
+        user, _token = resultado
+        if dispositivo_ajeno(user, dispositivo_de(request)):
+            raise InvalidToken(
+                'Tu sesión está abierta en otro dispositivo. Inicia sesión de nuevo.'
+            )
+        # La petición cuenta como actividad: renueva el plazo para la siguiente.
+        registrar_actividad(user)
+        return resultado

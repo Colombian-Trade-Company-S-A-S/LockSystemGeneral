@@ -39,6 +39,12 @@ services:
       - key: DATABASE_URL
         sync: false
 
+      # Minutos de inactividad antes de cerrar la sesión (0 la desactiva).
+      # Se puede ajustar en el dashboard sin volver a compilar el frontend:
+      # el valor viaja en /api/me/ y la interfaz lo obedece.
+      - key: SESSION_IDLE_TIMEOUT_MINUTES
+        value: "1"
+
       # Origen del frontend, para la allowlist de CORS.
       # Ej: https://lockingsystem-web.onrender.com
       - key: CORS_ALLOWED_ORIGINS

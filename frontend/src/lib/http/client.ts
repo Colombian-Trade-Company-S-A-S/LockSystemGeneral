@@ -2,6 +2,7 @@
 // estructurada (ApiError) y renueva el access token automáticamente ante un 401.
 
 import { config } from '@/lib/config'
+import { getDeviceId } from '@/lib/http/device'
 import { ApiError } from '@/lib/http/errors'
 import { tokenStore } from '@/lib/http/tokens'
 
@@ -16,6 +17,27 @@ interface RequestOptions extends RequestInit {
 // vencido a la vez, todas esperan el MISMO refresh en lugar de disparar varios.
 let refreshInFlight: Promise<boolean> | null = null
 
+// Aviso de "el servidor ya no reconoce esta sesión". Lo escucha el AuthProvider
+// para mandar al login en vez de dejar la pantalla llena de errores 401. Pasa
+// cada vez que el backend corta por su cuenta: sesión cerrada por un
+// administrador, inactividad, o la cuenta abierta desde otro dispositivo.
+let alPerderSesion: (() => void) | null = null
+
+/** Registra el aviso de sesión perdida. Devuelve la función para darse de baja. */
+export function onSesionPerdida(handler: () => void): () => void {
+  alPerderSesion = handler
+  return () => {
+    if (alPerderSesion === handler) alPerderSesion = null
+  }
+}
+
+/** Descarta los tokens y avisa: el servidor ya no acepta esta sesión. */
+function sesionPerdida(): false {
+  tokenStore.clear()
+  alPerderSesion?.()
+  return false
+}
+
 async function performRefresh(): Promise<boolean> {
   const refresh = tokenStore.getRefresh()
   if (!refresh) return false
@@ -23,14 +45,15 @@ async function performRefresh(): Promise<boolean> {
   try {
     const res = await fetch(`${config.apiBaseUrl}${config.endpoints.refresh}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        // El backend solo renueva desde el navegador que abrió la sesión.
+        [config.deviceHeader]: getDeviceId(),
+      },
       body: JSON.stringify({ refresh }),
     })
 
-    if (!res.ok) {
-      tokenStore.clear()
-      return false
-    }
+    if (!res.ok) return sesionPerdida()
 
     const data = (await res.json()) as { access: string; refresh?: string }
     tokenStore.setAccess(data.access)
@@ -38,8 +61,7 @@ async function performRefresh(): Promise<boolean> {
     if (data.refresh) tokenStore.setRefresh(data.refresh)
     return true
   } catch {
-    tokenStore.clear()
-    return false
+    return sesionPerdida()
   }
 }
 
@@ -61,6 +83,9 @@ export async function apiFetch<T>(
 
   const finalHeaders: Record<string, string> = {
     'Content-Type': 'application/json',
+    // Sesión única: el backend comprueba que la petición llega del mismo
+    // navegador donde se inició la sesión (ver src/lib/http/device.ts).
+    [config.deviceHeader]: getDeviceId(),
     ...(headers as Record<string, string> | undefined),
   }
 
@@ -106,7 +131,9 @@ export async function apiFetch<T>(
  */
 export async function apiDownload(path: string, filename: string): Promise<void> {
   async function intento(retry: boolean): Promise<Response> {
-    const headers: Record<string, string> = {}
+    const headers: Record<string, string> = {
+      [config.deviceHeader]: getDeviceId(),
+    }
     const access = tokenStore.getAccess()
     if (access) headers.Authorization = `Bearer ${access}`
     const res = await fetch(`${config.apiBaseUrl}${path}`, { headers })

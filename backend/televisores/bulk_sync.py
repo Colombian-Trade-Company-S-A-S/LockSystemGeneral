@@ -12,6 +12,7 @@ from django.db import connections
 from django.utils import timezone
 
 from .models import BulkSyncItem, BulkSyncJob, Televisor
+from .portal import open_sync
 from .portal.client import PortalClient, PortalError
 from .portal.selenium_sync import abrir_sesion, aplicar_en_sesion
 from .sync_limits import cupo_navegador
@@ -90,6 +91,123 @@ def _correr_lote(job_id: int):
                 driver.quit()
             except Exception:  # noqa: BLE001
                 pass
+        connections.close_all()
+
+
+def _respaldo_selenium(televisores) -> dict:
+    """Aplica por Selenium los televisores que la API no pudo.
+
+    Un solo navegador y un solo login para todos, igual que `_correr_lote`.
+    """
+    from .portal.selenium_sync import ResultadoSync
+
+    resultados = {}
+    driver = None
+    try:
+        driver, wait = abrir_sesion()
+        for tv in televisores:
+            res = aplicar_en_sesion(driver, wait, tv)
+            res.log.insert(0, 'La API falló; se aplicó con Selenium.')
+            resultados[tv.pk] = res
+    except Exception as e:  # noqa: BLE001
+        # Ni la API ni Selenium: se marcan todos con el fallo del respaldo.
+        for tv in televisores:
+            if tv.pk not in resultados:
+                res = ResultadoSync()
+                res.ok = False
+                res.error = f'API y Selenium fallaron. Selenium: {type(e).__name__}: {e}'
+                resultados[tv.pk] = res
+    finally:
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:  # noqa: BLE001
+                pass
+    return resultados
+
+
+def _ejecutar_open(job_id: int):
+    """Igual que `_ejecutar` pero por la Portal API: sin navegador y en lote.
+
+    Selenium necesita un login y una visita por televisor; aquí el bloqueo de
+    todo el lote son dos llamadas (una por estado deseado). Por eso no hay
+    progreso televisor a televisor: se marca 0 y luego el total.
+
+    No pide `cupo_navegador`: ese semáforo existe para no quedarse sin RAM por
+    los Chromium, y aquí no se abre ninguno. Solo el respaldo lo necesitaría.
+    """
+    try:
+        BulkSyncJob.objects.filter(pk=job_id).update(estado=BulkSyncJob.CORRIENDO)
+
+        if BulkSyncJob.objects.filter(pk=job_id, cancelar_solicitado=True).exists():
+            BulkSyncJob.objects.filter(pk=job_id).update(
+                estado=BulkSyncJob.CANCELADO, terminado_en=timezone.now()
+            )
+            return
+
+        items = list(
+            BulkSyncItem.objects.filter(job_id=job_id).values_list('pk', 'televisor_id')
+        )
+        por_tv = {tv_id: item_pk for item_pk, tv_id in items if tv_id is not None}
+        televisores = list(Televisor.objects.filter(pk__in=por_tv.keys()))
+
+        resultados, respaldo = open_sync.aplicar_lote(televisores)
+
+        # Si la API falló para parte del lote, se reintenta esa parte con
+        # Selenium: un solo login para todos los que quedaron pendientes.
+        if respaldo:
+            with cupo_navegador(masivo=True):
+                resultados.update(_respaldo_selenium(respaldo))
+
+        ok = 0
+        err = 0
+        for tv in televisores:
+            res = resultados.get(tv.pk)
+            if res is not None and res.ok and res.aplicado:
+                estado_item = BulkSyncItem.OK
+                mensaje = 'Inhabilitado' if tv.inhabilitado else 'Habilitado'
+                ok += 1
+            else:
+                estado_item = BulkSyncItem.ERROR
+                mensaje = (res.error if res else '') or 'No se pudo aplicar.'
+                err += 1
+            BulkSyncItem.objects.filter(pk=por_tv[tv.pk]).update(
+                estado=estado_item, mensaje=mensaje[:500]
+            )
+
+        # Items cuyo televisor se borró mientras corría el lote (la FK es
+        # SET_NULL). La versión Selenium los marca como error al fallar el
+        # `Televisor.objects.get`; aquí no pasan por ahí, así que si no se
+        # cierran a mano el job terminaría dejándolos PENDIENTE para siempre.
+        huerfanos = BulkSyncItem.objects.filter(
+            job_id=job_id, estado=BulkSyncItem.PENDIENTE
+        )
+        sueltos = huerfanos.count()
+        if sueltos:
+            huerfanos.update(
+                estado=BulkSyncItem.ERROR, mensaje='El televisor ya no existe.'
+            )
+            err += sueltos
+
+        BulkSyncJob.objects.filter(pk=job_id).update(
+            estado=BulkSyncJob.TERMINADO,
+            procesados=len(televisores) + sueltos,
+            ok_count=ok,
+            error_count=err,
+            terminado_en=timezone.now(),
+        )
+    except Exception as e:  # noqa: BLE001
+        BulkSyncItem.objects.filter(
+            job_id=job_id, estado=BulkSyncItem.PENDIENTE
+        ).update(estado=BulkSyncItem.ERROR, mensaje=f'{type(e).__name__}: {e}'[:500])
+        BulkSyncJob.objects.filter(pk=job_id).update(
+            estado=BulkSyncJob.ERROR,
+            error_count=BulkSyncItem.objects.filter(
+                job_id=job_id, estado=BulkSyncItem.ERROR
+            ).count(),
+            terminado_en=timezone.now(),
+        )
+    finally:
         connections.close_all()
 
 
@@ -279,6 +397,9 @@ def lanzar_bulk_job(
         )
         for tv in cambiados
     ])
-    hilo = threading.Thread(target=_ejecutar, args=(job.pk,), daemon=True)
+    # La API es el camino normal; Selenium queda de respaldo dentro del propio
+    # `_ejecutar_open`. Si falta configuración, todo el lote va por Selenium.
+    runner = _ejecutar_open if open_sync.usa_open() else _ejecutar
+    hilo = threading.Thread(target=runner, args=(job.pk,), daemon=True)
     hilo.start()
     return job

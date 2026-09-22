@@ -9,6 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
+from corsheaders.defaults import default_headers
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 import os
@@ -295,6 +296,31 @@ SIMPLE_JWT = {
 }
 
 # ---------------------------------------------------------------------------
+# Cierre de sesión por inactividad
+# ---------------------------------------------------------------------------
+# Minutos que puede estar quieto un usuario antes de que su sesión muera.
+# Se define en `.env` (SESSION_IDLE_TIMEOUT_MINUTES); 0 o vacío la desactiva.
+#
+# El corte lo impone el SERVIDOR: cada petición autenticada actualiza la marca
+# de actividad del usuario y, si el hueco supera este plazo, el token deja de
+# valer (users/session.py). Que el frontend además saque al usuario al login es
+# comodidad de interfaz, no la barrera: aunque alguien guarde un token y vuelva
+# horas después con curl, el backend lo rechaza igual.
+#
+# El valor también viaja en /api/me/ para que el frontend use este mismo plazo
+# sin tener que recompilarse: se cambia aquí y basta con reiniciar el backend.
+def _minutos_de_inactividad() -> int:
+    """Lee el plazo del entorno. Un valor inválido se trata como desactivado."""
+    try:
+        minutos = int(os.getenv('SESSION_IDLE_TIMEOUT_MINUTES', '0'))
+    except ValueError:
+        return 0
+    return max(minutos, 0)
+
+
+SESSION_IDLE_TIMEOUT_MINUTES = _minutos_de_inactividad()
+
+# ---------------------------------------------------------------------------
 # WhaleTV Device Lock API (Zeasn SaaS) — firma HMAC-SHA1
 # ---------------------------------------------------------------------------
 # Credenciales por entorno: DEV/ACC/PROD. Se leen SIEMPRE de variables de
@@ -327,6 +353,46 @@ WHALETV_PORTAL = {
     'TIMEOUT': int(os.getenv('WHALETV_PORTAL_TIMEOUT', '30')),
     # Suma/resta de días a hoy para la Next Installment Date (igual que whaletv).
     'DIAS_DESFASE': int(os.getenv('WHALETV_PORTAL_DIAS_DESFASE', '30')),
+}
+
+# ---------------------------------------------------------------------------
+# WhaleTV Device Lock PORTAL API — el camino normal para bloquear/desbloquear
+# ---------------------------------------------------------------------------
+# No confundir con WHALETV_LOCK_API (device-side, saas.zeasn.tv, solo lectura).
+# Esta es la API del MISMO portal que se raspa con Selenium, así que SÍ bloquea:
+# `batch-lock` mueve hasta 1000 MAC en una llamada, sin navegador ni ~400 MB de
+# Chromium. Selenium queda de respaldo automático (ver portal/open_sync.py).
+#
+# Ponerlo en `false` fuerza Selenium para todo, sin desplegar código. Además
+# solo se activa si están las TRES credenciales (ver open_sync.usa_open()): con
+# la config a medias es preferible seguir por Selenium que fallar en cada
+# operación.
+#
+# BRAND_ID es hoy GLOBAL: todas las empresas comparten el brand "RCA" del grupo
+# Kayve. Si algún día cada empresa tiene su propia cuenta en WhaleTV, esto pasa
+# a ser un campo de `empresas.Empresa` y el cliente lo recibe por parámetro
+# (PortalOpenClient ya acepta `brand_id` en todos sus métodos para eso).
+WHALETV_LOCK_PORTAL_API = {
+    'ENABLED': os.getenv('WHALETV_LOCK_PORTAL_API_ENABLED', 'true').lower() == 'true',
+    'HOST': os.getenv(
+        'WHALETV_LOCK_PORTAL_API_HOST', 'acc-lockservice.whaletv.com'
+    ),
+    'ACCESS_KEY': os.getenv('WHALETV_LOCK_PORTAL_API_ACCESS_KEY', ''),
+    'SECRET_KEY': os.getenv('WHALETV_LOCK_PORTAL_API_SECRET_KEY', ''),
+    'BRAND_ID': os.getenv('WHALETV_LOCK_PORTAL_API_BRAND_ID', ''),
+    'API_BASE': os.getenv('WHALETV_LOCK_PORTAL_API_BASE', '/lock-portal/open/v1'),
+    'TIMEOUT': int(os.getenv('WHALETV_LOCK_PORTAL_API_TIMEOUT', '20')),
+}
+
+# Correos con acceso al diagnóstico de la API (pantalla de Configuración).
+# Es una herramienta de soporte, no una función del producto: enseña host,
+# brandId y los mensajes crudos de WhaleTV. Lista separada por comas.
+DIAGNOSTICO_API_EMAILS = {
+    c.strip().lower()
+    for c in os.getenv(
+        'DIAGNOSTICO_API_EMAILS', 'palaciosjulian286@gmail.com'
+    ).split(',')
+    if c.strip()
 }
 
 # Tope GLOBAL de navegadores Selenium simultáneos (protege la RAM del servidor;
@@ -367,6 +433,11 @@ CORS_ALLOWED_ORIGINS = [
 ]
 # La autenticación viaja en el header Authorization (Bearer), no en cookies.
 CORS_ALLOW_CREDENTIALS = False
+
+# Cabecera propia con la que el navegador se identifica para la sesión única
+# (users/session.py). Hay que declararla o el navegador la bloquea en el
+# preflight y todas las peticiones desde otro origen fallarían.
+CORS_ALLOW_HEADERS = (*default_headers, 'x-device-id')
 
 
 # ---------------------------------------------------------------------------

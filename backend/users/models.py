@@ -95,6 +95,40 @@ class User(AbstractBaseUser, PermissionsMixin):
     # ambigüedad de segundos que tendría comparar por fecha de emisión).
     token_version = models.PositiveIntegerField(_('versión de token'), default=0)
 
+    # --- Sesión única: una cuenta, un navegador ---
+    # Identificador opaco del navegador que tiene la sesión abierta. Vacío = no
+    # hay sesión ocupando la cuenta. Mientras esté puesto, ni esta cuenta puede
+    # entrar desde otro navegador ni otra cuenta puede entrar desde este.
+    device_id = models.CharField(
+        _('dispositivo de la sesión'),
+        max_length=64,
+        blank=True,
+        default='',
+        db_index=True,
+        help_text=_('Navegador que tiene la sesión abierta. Vacío = sin sesión.'),
+    )
+    # Descripción legible del navegador (p. ej. "Chrome en Windows"), solo para
+    # que los mensajes y la pantalla de usuarios digan algo útil.
+    device_label = models.CharField(
+        _('descripción del dispositivo'), max_length=200, blank=True, default=''
+    )
+    session_started_at = models.DateTimeField(
+        _('sesión iniciada el'), null=True, blank=True
+    )
+
+    # Última petición autenticada del usuario. Es la base del cierre de sesión
+    # por inactividad (SESSION_IDLE_TIMEOUT_MINUTES): si el hueco entre esta
+    # marca y la petición actual supera el plazo, el token deja de validar.
+    # Vive en la base de datos y no en caché porque en producción hay varios
+    # procesos de gunicorn: cada uno tendría su propia caché en memoria y la
+    # sesión duraría distinto según qué worker atendiera la petición.
+    last_activity = models.DateTimeField(
+        _('última actividad'),
+        null=True,
+        blank=True,
+        help_text=_('Momento de la última petición autenticada.'),
+    )
+
     objects = UserManager()
 
     USERNAME_FIELD = 'email'
@@ -155,6 +189,28 @@ class User(AbstractBaseUser, PermissionsMixin):
         self.token_version = models.F('token_version') + 1
         self.save(update_fields=['token_version', 'updated_at'])
         self.refresh_from_db(fields=['token_version'])
+
+    def cerrar_sesion(self) -> None:
+        """Cierra la sesión abierta: libera el navegador y mata los tokens.
+
+        Es lo que corre en el logout y en el cierre forzado por un
+        administrador. Libera además la cuenta para que pueda volver a entrar
+        desde donde sea.
+        """
+        self.device_id = ''
+        self.device_label = ''
+        self.session_started_at = None
+        self.last_activity = None
+        self.save(
+            update_fields=[
+                'device_id',
+                'device_label',
+                'session_started_at',
+                'last_activity',
+                'updated_at',
+            ]
+        )
+        self.revoke_tokens()
 
     @property
     def full_name(self) -> str:
