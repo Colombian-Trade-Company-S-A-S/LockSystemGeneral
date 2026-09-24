@@ -49,8 +49,31 @@ ERRORES_DE_NEGOCIO = (
 )
 
 
+def mismo_entorno() -> bool:
+    """¿La Portal API y el portal que maneja Selenium son el MISMO servidor?
+
+    Son dos configuraciones independientes: la API usa
+    `WHALETV_LOCK_PORTAL_API['HOST']` y Selenium entra por
+    `WHALETV_PORTAL['LOGIN_URL']`. Nada impide que apunten a entornos
+    distintos, y de hecho ya pasó (API en ACC, Selenium en producción).
+    """
+    from urllib.parse import urlparse
+
+    api = (settings.WHALETV_LOCK_PORTAL_API.get('HOST') or '').strip().lower()
+    web = (urlparse(settings.WHALETV_PORTAL.get('LOGIN_URL') or '').hostname
+           or '').strip().lower()
+    return bool(api) and api == web
+
+
 def merece_respaldo(exc: Exception) -> bool:
     """True si vale la pena reintentar la operación por Selenium."""
+    # "Ese MAC no existe" solo permite descartar Selenium si ambos miran el
+    # mismo portal. Si no, la API puede estar diciendo la verdad sobre SU
+    # entorno y el equipo existir igualmente en el de Selenium: dar el fallo
+    # por definitivo dejaría el televisor sin bloquear, que es justo lo que
+    # Selenium estaba ahí para evitar.
+    if isinstance(exc, PortalOpenDispositivoNoExiste) and not mismo_entorno():
+        return True
     return not isinstance(exc, ERRORES_DE_NEGOCIO)
 
 
@@ -207,6 +230,11 @@ def aplicar_lote(televisores, sincronizar_fecha=True):
             r.error = str(e)
         return resultados, list(televisores)
 
+    # Si Selenium entra a OTRO portal, que un MAC falte aquí no dice nada de
+    # allí: esos televisores van al respaldo en vez de darse por perdidos.
+    # Ver `mismo_entorno()` y `merece_respaldo()`.
+    desconocido_es_definitivo = mismo_entorno()
+
     conocidos = []
     for tv in televisores:
         if tv.mac_address.upper() in mapa:
@@ -215,6 +243,8 @@ def aplicar_lote(televisores, sincronizar_fecha=True):
             r = resultados[tv.pk]
             r.ok = False
             r.error = f'No se encontró el MAC {tv.mac_address} en el portal.'
+            if not desconocido_es_definitivo:
+                respaldo.append(tv)
 
     for inhabilitar in (True, False):
         grupo = [tv for tv in conocidos if bool(tv.inhabilitado) is inhabilitar]

@@ -78,6 +78,48 @@ class MereceRespaldoTests(SimpleTestCase):
                 self.assertTrue(open_sync.merece_respaldo(exc))
 
 
+class MismoEntornoTests(SimpleTestCase):
+    """La API y Selenium se configuran por separado y pueden descasarse.
+
+    Pasó de verdad: la API quedó apuntando a ACC mientras Selenium entraba a
+    producción, y los televisores reales (que solo están en producción) se
+    reportaban como inexistentes sin llegar a intentarse por Selenium.
+    """
+
+    PORTAL_PROD = {'LOGIN_URL': 'https://lockservice.whaletv.com/login',
+                   'DIAS_DESFASE': 30}
+
+    def test_detecta_entornos_distintos(self):
+        with override_settings(
+            WHALETV_LOCK_PORTAL_API=_cfg(HOST='acc-lockservice.whaletv.com'),
+            WHALETV_PORTAL=self.PORTAL_PROD,
+        ):
+            self.assertFalse(open_sync.mismo_entorno())
+
+    def test_detecta_el_mismo_entorno(self):
+        with override_settings(
+            WHALETV_LOCK_PORTAL_API=_cfg(HOST='lockservice.whaletv.com'),
+            WHALETV_PORTAL=self.PORTAL_PROD,
+        ):
+            self.assertTrue(open_sync.mismo_entorno())
+
+    def test_mac_desconocido_va_a_selenium_si_los_entornos_diferen(self):
+        exc = PortalOpenDispositivoNoExiste('no está')
+        with override_settings(
+            WHALETV_LOCK_PORTAL_API=_cfg(HOST='acc-lockservice.whaletv.com'),
+            WHALETV_PORTAL=self.PORTAL_PROD,
+        ):
+            self.assertTrue(open_sync.merece_respaldo(exc))
+
+    def test_mac_desconocido_es_definitivo_si_es_el_mismo_portal(self):
+        exc = PortalOpenDispositivoNoExiste('no está')
+        with override_settings(
+            WHALETV_LOCK_PORTAL_API=_cfg(HOST='lockservice.whaletv.com'),
+            WHALETV_PORTAL=self.PORTAL_PROD,
+        ):
+            self.assertFalse(open_sync.merece_respaldo(exc))
+
+
 class FormatoFechaTests(SimpleTestCase):
     """MM/dd/yyyy con BARRAS. El ejemplo del PDF trae guiones y la API los
     rechaza; verificado contra ACC."""

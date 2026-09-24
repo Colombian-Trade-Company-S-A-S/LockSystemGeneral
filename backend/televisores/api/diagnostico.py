@@ -143,9 +143,17 @@ def _explicar_marca(cliente, error) -> str:
             )
     except PortalOpenError:
         pass
+    # Aquí no se puede distinguir cuál de las dos causas es: WhaleTV responde
+    # el mismo "no permission for this brand" tanto si el brandId no es de este
+    # entorno como si la marca no está vinculada al Access Key. Se nombran las
+    # dos, en el orden en que salen más barato comprobarlas.
     return (
-        f'El Brand ID configurado ({error}). Revisa '
-        'WHALETV_LOCK_PORTAL_API_BRAND_ID.'
+        f'WhaleTV rechaza la marca {cliente.cfg.get("BRAND_ID")} ({error}). '
+        'Dos causas posibles: (1) el Brand ID no es el de este entorno — ACC y '
+        'produccion tienen ids distintos, y el bueno se ve entrando al portal '
+        'con GET /lock-portal/lock/device/brandList; (2) la marca no esta '
+        'vinculada a este Access Key del lado de Zeasn, que ya ha pasado dos '
+        'veces tras despliegues suyos y solo lo arreglan ellos.'
     )
 
 

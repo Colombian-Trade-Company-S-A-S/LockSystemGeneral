@@ -1,0 +1,177 @@
+==============================================================================
+  WhaleTV Device Lock Portal API - PRODUCTION integration debug log
+==============================================================================
+
+Reported by : Colombian Trade Company / Kayve (Locking System)
+Generated   : 2026-09-24T16:45:34.389521+00:00 (UTC)
+Environment : PRODUCTION - lockservice.whaletv.com
+API version : /lock-portal/open/v1  (doc "Device Lock Portal API" v1.0.2)
+accessKey   : 1095d44693c7c147d698c3aab70de90287
+secretKey   : NOT included in this file (kept secret on our side)
+brandId     : 200  (brand "Kayve")
+
+PROBLEM
+-------
+Every PRODUCTION API call returns errorCode 270202 "no permission for
+this brand", on every endpoint, for brandId 200.
+
+Authentication itself succeeds. See the control cases below:
+  * omitting brandId returns a DIFFERENT error (270201 "brandId is
+    required"), so the server reads and validates our request;
+  * signing with a wrong secret returns HTTP 401 AUTHORIZATION SIGNATURE
+    ERROR, so our signature IS being accepted in every other case;
+  * the SAME client code, against ACC with the ACC credentials, works and
+    returns devices. So our signature algorithm is correct.
+
+This points to brand 200 having no binding to this accessKey on your side.
+
+REQUEST
+-------
+Please bind brand "Kayve" (brandId 200) to accessKey
+1095d44693c7c147d698c3aab70de90287 on lockservice.whaletv.com.
+
+The brandId above is not a guess: it comes from your own portal. Logged in
+at https://lockservice.whaletv.com as tech@kayvegroup.com, the web UI calls
+  GET /lock-portal/lock/device/brandList
+which responds:
+  {"data":[{"brandId":"200","brandName":"Kayve","productList":[],
+   "subDataDefault":null}],"errorCode":"0","errorMsg":null}
+
+Note that the web portal does NOT send brandId in its own requests (e.g.
+GET /lock-portal/lock/device/page?pageNum=1&pageSize=10): it resolves the
+brand from the logged-in user. That is why the portal works for us while
+the Open API does not.
+
+The devices we need to manage are visible in that portal right now, e.g.
+54:01:4A:16:35:78, 54:01:4A:16:35:79, B4:04:29:7E:3A:ED, 84:93:EC:87:12:71.
+
+==============================================================================
+  CONTROL CASES (all read-only)
+==============================================================================
+
+------------------------------------------------------------------------------
+CASE: PRODUCTION - device list with brandId 200 (the real one)
+------------------------------------------------------------------------------
+Purpose         : The failing call. brandId taken from your own brandList endpoint.
+UTC time        : 2026-09-24T16:45:35.282235+00:00
+Request         : GET https://lockservice.whaletv.com/lock-portal/open/v1/devices?brandId=200&pageSize=1
+Signed URI      : /lock-portal/open/v1/devices
+Timestamp (ms)  : 1790268334389
+String signed   : /lock-portal/open/v1/devices1790268334389
+                  (= signed URI + timestamp, concatenated, no separator)
+Signature alg   : Base64(HmacSHA1(secretKey, stringSigned))
+Request headers :
+  Authorization : 1095d44693c7c147d698c3aab70de90287:W0mX6N/NzbyRrLjz9/eVli/Ol+w=:1790268334389
+  Accept        : application/json
+Response status : HTTP 200
+Response body   :
+  {"errorCode":"270202","errorMsg":"no permission for this brand","timestamp":"1790268335278"}
+
+------------------------------------------------------------------------------
+CASE: PRODUCTION - device list with NO brandId
+------------------------------------------------------------------------------
+Purpose         : Different error (270201) => the request IS parsed and authenticated.
+UTC time        : 2026-09-24T16:45:36.092727+00:00
+Request         : GET https://lockservice.whaletv.com/lock-portal/open/v1/devices?pageSize=1
+Signed URI      : /lock-portal/open/v1/devices
+Timestamp (ms)  : 1790268335282
+String signed   : /lock-portal/open/v1/devices1790268335282
+                  (= signed URI + timestamp, concatenated, no separator)
+Signature alg   : Base64(HmacSHA1(secretKey, stringSigned))
+Request headers :
+  Authorization : 1095d44693c7c147d698c3aab70de90287:sPsdLtVdGjqpqC32Rmah8te847I=:1790268335282
+  Accept        : application/json
+Response status : HTTP 200
+Response body   :
+  {"errorCode":"270201","errorMsg":"request format invalid: Required request parameter 'brandId' for method parameter type Long is not present","timestamp":"1790268336089"}
+
+------------------------------------------------------------------------------
+CASE: PRODUCTION - device list with a WRONG secretKey
+------------------------------------------------------------------------------
+Purpose         : HTTP 401 => signatures ARE verified; ours is accepted elsewhere.
+UTC time        : 2026-09-24T16:45:36.901655+00:00
+Request         : GET https://lockservice.whaletv.com/lock-portal/open/v1/devices?brandId=200&pageSize=1
+Signed URI      : /lock-portal/open/v1/devices
+Timestamp (ms)  : 1790268336092
+String signed   : /lock-portal/open/v1/devices1790268336092
+                  (= signed URI + timestamp, concatenated, no separator)
+Signature alg   : Base64(HmacSHA1(secretKey, stringSigned))
+Request headers :
+  Authorization : 1095d44693c7c147d698c3aab70de90287:8Mcb4o7HTFPcBSZOoUgD66CprAM=:1790268336092
+  Accept        : application/json
+Response status : HTTP 401
+Response body   :
+  AUTHORIZATION SIGNATURE ERROR
+
+------------------------------------------------------------------------------
+CASE: PRODUCTION - device list with a brandId that is not ours
+------------------------------------------------------------------------------
+Purpose         : Same message as brand 200: the error does not distinguish the cases.
+UTC time        : 2026-09-24T16:45:37.718388+00:00
+Request         : GET https://lockservice.whaletv.com/lock-portal/open/v1/devices?brandId=1&pageSize=1
+Signed URI      : /lock-portal/open/v1/devices
+Timestamp (ms)  : 1790268336901
+String signed   : /lock-portal/open/v1/devices1790268336901
+                  (= signed URI + timestamp, concatenated, no separator)
+Signature alg   : Base64(HmacSHA1(secretKey, stringSigned))
+Request headers :
+  Authorization : 1095d44693c7c147d698c3aab70de90287:QyngmLBwwQxKiflNQ40j2mcIObw=:1790268336901
+  Accept        : application/json
+Response status : HTTP 200
+Response body   :
+  {"errorCode":"270202","errorMsg":"no permission for this brand","timestamp":"1790268337717"}
+
+------------------------------------------------------------------------------
+CASE: ACC - same client code, ACC credentials, ACC brandId
+------------------------------------------------------------------------------
+Purpose         : Proof that our signing implementation is correct: this one returns data.
+UTC time        : 2026-09-24T16:45:38.520725+00:00
+Request         : GET https://acc-lockservice.whaletv.com/lock-portal/open/v1/devices?brandId=266602544414330786&pageSize=1
+Signed URI      : /lock-portal/open/v1/devices
+Timestamp (ms)  : 1790268337718
+String signed   : /lock-portal/open/v1/devices1790268337718
+                  (= signed URI + timestamp, concatenated, no separator)
+Signature alg   : Base64(HmacSHA1(secretKey, stringSigned))
+Request headers :
+  Authorization : 10a7ea42f147464a3eaf2b82c47c901569:Lnwk51Rz+EdHBVq3NYzoHEOcOlc=:1790268337718
+  Accept        : application/json
+Response status : HTTP 200
+Response body   :
+  {"data":[{"dueStatus":"0","id":"1089181427012475062","importTime":"1785978489493","lastOnlineTime":"1790087738317","mac":"B4:04:29:7E:3A:EE","nextInstallmentDate":"08\/04\/2027","paymentStatus":"0","sn":null,"status":"0"}],"errorCode":"0","errorMsg":null,"timestamp":"1790268338522","totalSize":"3"}
+
+------------------------------------------------------------------------------
+CASE: PRODUCTION - ACC accessKey against production
+------------------------------------------------------------------------------
+Purpose         : Confirms each accessKey belongs to exactly one environment.
+UTC time        : 2026-09-24T16:45:39.327355+00:00
+Request         : GET https://lockservice.whaletv.com/lock-portal/open/v1/devices?brandId=266602544414330786&pageSize=1
+Signed URI      : /lock-portal/open/v1/devices
+Timestamp (ms)  : 1790268338520
+String signed   : /lock-portal/open/v1/devices1790268338520
+                  (= signed URI + timestamp, concatenated, no separator)
+Signature alg   : Base64(HmacSHA1(secretKey, stringSigned))
+Request headers :
+  Authorization : 10a7ea42f147464a3eaf2b82c47c901569:KHGmEASXQMzpkt+Cy0z5TxxxSrI=:1790268338520
+  Accept        : application/json
+Response status : HTTP 401
+Response body   :
+  AUTHORIZATION ACCESSKEY NON-EXISTENT
+
+==============================================================================
+  WRITE OPERATION - payload shown, NOT executed
+==============================================================================
+
+------------------------------------------------------------------------------
+CASE: Batch lock (POST) - the endpoint we ultimately need
+------------------------------------------------------------------------------
+Request         : POST https://lockservice.whaletv.com/lock-portal/open/v1/devices/batch-lock
+Signed URI      : /lock-portal/open/v1/devices/batch-lock
+Timestamp (ms)  : 1790268339327
+String signed   : /lock-portal/open/v1/devices/batch-lock1790268339327
+Request headers :
+  Authorization : 1095d44693c7c147d698c3aab70de90287:H9aEUkEYMmCaqfOvJ2Z/dIwGwTs=:1790268339327
+  Content-Type  : application/json
+Request body    :
+  {"brandId": "200", "macs": ["54:01:4A:16:35:78"], "status": 1}
+Response        : NOT SENT - write operation, shown only so you can see
+                  the exact payload we would send once the brand is bound.
