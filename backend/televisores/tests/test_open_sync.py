@@ -13,6 +13,7 @@ from televisores import sync_runner
 from televisores.models import Televisor
 from televisores.portal import open_sync
 from televisores.portal.open_client import (
+    PortalOpenParametros,
     PortalOpenBrandNoAutorizado,
     PortalOpenDispositivoNoExiste,
     PortalOpenError,
@@ -118,6 +119,77 @@ class MismoEntornoTests(SimpleTestCase):
             WHALETV_PORTAL=self.PORTAL_PROD,
         ):
             self.assertFalse(open_sync.merece_respaldo(exc))
+
+
+class EmpujarFechaTests(SimpleTestCase):
+    """Producción pide `yyyy-MM-dd`, pero escribírselo así rompe su propio
+    GET /devices/detail para ese equipo, de forma irreversible por la API."""
+
+    def _empujar(self, efecto):
+        tv = Televisor(mac_address='AA:BB:CC:DD:EE:01', inhabilitado=True)
+        res = ResultadoSync()
+        cliente = mock.Mock()
+        cliente.actualizar.side_effect = efecto
+        open_sync._empujar_fecha(cliente, 1, tv, res)
+        return cliente, res
+
+    def test_fecha_en_el_formato_del_doc(self):
+        cliente, res = self._empujar(None)
+        enviado = cliente.actualizar.call_args.kwargs['next_installment_date']
+        self.assertRegex(enviado, r'^\d{2}/\d{2}/\d{4}$')
+        self.assertIn('Next Installment Date', res.log[0])
+
+    def test_no_reintenta_en_iso_aunque_el_portal_lo_pida(self):
+        """El reintento 'obvio' es justo el que corrompe el registro."""
+        cliente, res = self._empujar(
+            PortalOpenParametros('nextInstallmentDate format must be yyyy-MM-dd (270201)')
+        )
+        self.assertEqual(cliente.actualizar.call_count, 1, 'no debe reintentar')
+        self.assertIn('No se fijó la fecha', res.log[0])
+
+    def test_un_fallo_de_fecha_no_tumba_el_bloqueo(self):
+        _, res = self._empujar(PortalOpenError('503'))
+        self.assertIn('El bloqueo sí se aplicó', res.log[0])
+
+
+class VerificacionDelEstadoTests(SimpleTestCase):
+    """`batch-lock` responde `false` cuando no cambia nada, sin distinguir
+    "ya estaba así" de "no se pudo". Así que manda el estado releído."""
+
+    def _intentar(self, pedido_inhabilitado, estado_remoto):
+        tv = Televisor(mac_address='AA:BB:CC:DD:EE:01',
+                       inhabilitado=pedido_inhabilitado)
+        cliente = mock.Mock()
+        cliente.buscar_por_mac.return_value = {'id': 1, 'mac': tv.mac_address}
+        cliente.bloquear.return_value = False       # lo que devolvió producción
+        cliente.detalle.return_value = {'status': estado_remoto}
+        with override_settings(WHALETV_LOCK_PORTAL_API=CFG), \
+                mock.patch.object(open_sync, 'PortalOpenClient',
+                                  return_value=cliente):
+            return open_sync.intentar(tv, sincronizar_fecha=False)
+
+    def test_ok_si_el_portal_quedo_como_se_pidio(self):
+        res, respaldo = self._intentar(True, 1)
+        self.assertTrue(res.ok)
+        self.assertFalse(respaldo)
+
+    def test_falla_si_el_portal_no_hizo_caso(self):
+        """Lo importante: no reportar "bloqueado" un equipo que sigue abierto."""
+        res, respaldo = self._intentar(True, 0)
+        self.assertFalse(res.ok)
+        self.assertTrue(respaldo, 'debe reintentarse por Selenium')
+
+    def test_no_concluye_nada_si_no_se_pudo_releer(self):
+        tv = Televisor(mac_address='AA:BB:CC:DD:EE:01', inhabilitado=True)
+        cliente = mock.Mock()
+        cliente.buscar_por_mac.return_value = {'id': 1, 'mac': tv.mac_address}
+        cliente.bloquear.return_value = False
+        cliente.detalle.side_effect = PortalOpenError('503')
+        with override_settings(WHALETV_LOCK_PORTAL_API=CFG), \
+                mock.patch.object(open_sync, 'PortalOpenClient',
+                                  return_value=cliente):
+            res, _ = open_sync.intentar(tv, sincronizar_fecha=False)
+        self.assertTrue(res.ok, 'la verificación es informativa, no invalida')
 
 
 class FormatoFechaTests(SimpleTestCase):

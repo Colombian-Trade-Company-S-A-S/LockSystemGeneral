@@ -35,6 +35,14 @@ from .selenium_sync import ResultadoSync
 
 # La API exige MM/dd/yyyy (doc 1.0.2). Ojo: el ejemplo del PDF trae guiones
 # ("09-27-2026") pero la API los rechaza; verificado contra ACC el 2026-08-31.
+#
+# PRODUCCIÓN corre una versión anterior que rechaza ese formato y pide
+# `yyyy-MM-dd` (270201 "format must be yyyy-MM-dd"). NO se le manda así:
+# cuando se le escribe en ISO guarda algo que su propio GET /devices/detail ya
+# no sabe leer, y ese equipo responde `internal error (500)` de forma
+# permanente —comprobado 3/3 veces, en otro equipo intacto el detail funciona—
+# sin manera de revertirlo por la API, porque rechaza el formato bueno. Se
+# arregla reescribiendo la fecha desde el portal web. Ver `_empujar_fecha`.
 FORMATO_FECHA = '%m/%d/%Y'
 
 # Fallos del DATO, no del servicio: reintentar por Selenium daría el mismo
@@ -132,6 +140,19 @@ def intentar(televisor, sincronizar_fecha=True, progreso=None):
         avisar(90, 'Verificando…')
         _leer_estado(cliente, encontrado['id'], res)
 
+        # `batch-lock` devuelve `false` cuando no cambia nada —por ejemplo al
+        # pedir el estado que el equipo ya tenía— y esa respuesta no distingue
+        # "ya estaba así" de "no se pudo aplicar". Por eso no se confía en ese
+        # booleano: manda el estado releído del portal. Si no se pudo releer,
+        # `remoto_inhabilitado` queda en None y no se concluye nada.
+        deseado = bool(televisor.inhabilitado)
+        if res.remoto_inhabilitado is not None and res.remoto_inhabilitado != deseado:
+            raise PortalOpenError(
+                'El portal sigue con el televisor '
+                + ('habilitado' if deseado else 'inhabilitado')
+                + ' después de pedir lo contrario.'
+            )
+
         res.ok = True
         res.aplicado = True
         return res, False
@@ -161,11 +182,25 @@ def sincronizar_estado(
 
 
 def _empujar_fecha(cliente, device_id, televisor, res):
-    """Best-effort: si falla, el bloqueo ya se aplicó y eso es lo que importa."""
+    """Best-effort: si falla, el bloqueo ya se aplicó y eso es lo que importa.
+
+    Si el portal rechaza el formato NO se reintenta con el otro, por mucho que
+    el propio error diga cuál quiere: mandárselo en `yyyy-MM-dd` deja el equipo
+    con el detalle roto en WhaleTV y sin forma de arreglarlo por la API (ver
+    FORMATO_FECHA). Entre no sincronizar la fecha y corromper el registro,
+    se prefiere lo primero, que además se arregla solo cuando WhaleTV
+    actualice producción a la versión que ya corre en ACC.
+    """
+    fecha = _fecha(televisor)
     try:
-        fecha = _fecha(televisor)
         cliente.actualizar(device_id, next_installment_date=fecha)
         res.paso(f'Next Installment Date: {fecha}')
+    except PortalOpenParametros as e:
+        res.paso(
+            f'No se fijó la fecha: este portal pide otro formato ({e}), y '
+            'escribírsela así corrompe el detalle del equipo en WhaleTV. '
+            'El bloqueo sí se aplicó.'
+        )
     except PortalOpenError as e:
         res.paso(f'No se pudo fijar la fecha ({e}). El bloqueo sí se aplicó.')
 
